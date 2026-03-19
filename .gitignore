@@ -1,0 +1,26 @@
+# Maven
+target/
+*.jar
+*.war
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.class
+
+# Maxfiy sozlamalar — HECH QACHON git ga push qilinmasin!
+application.properties
+application-local.properties
+application-dev.properties
+*.env
+.env
+
+# Fayllar
+uploads/
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

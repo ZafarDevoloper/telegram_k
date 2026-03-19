@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    logback-spring.xml — [P2] Rolling log konfiguratsiyasi
+    Joyi: src/main/resources/logback-spring.xml
+
+    Xususiyatlar:
+    - Kunlik rotation (yangi kun = yangi fayl)
+    - Max 10MB per fayl
+    - Max 30 kun saqlanadi
+    - Max jami 300MB
+    - Konsol + fayl (production da faqat fayl)
+-->
+<configuration>
+
+    <springProperty scope="context" name="LOG_PATH" source="logging.file.name" defaultValue="logs/app.log"/>
+
+    <!-- ─── Konsol (development uchun) ──────────────────────────────── -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ─── Fayl (production uchun) ─────────────────────────────────── -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_PATH}</file>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n</pattern>
+        </encoder>
+
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- Kunlik rotation + gzip arxiv -->
+            <fileNamePattern>${LOG_PATH}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+            <!-- Max 10MB per fayl -->
+            <maxFileSize>10MB</maxFileSize>
+            <!-- Max 30 kun -->
+            <maxHistory>30</maxHistory>
+            <!-- Max jami 300MB -->
+            <totalSizeCap>300MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!-- ─── Xato log (alohida fayl) ──────────────────────────────────── -->
+    <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/error.log</file>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>ERROR</level>
+        </filter>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n%ex</pattern>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/error.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>90</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!-- ─── Log darajalari ───────────────────────────────────────────── -->
+    <logger name="com.example.demo" level="INFO"/>
+    <logger name="org.springframework.web" level="WARN"/>
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="org.telegram" level="WARN"/>
+
+    <!-- ─── Root logger ──────────────────────────────────────────────── -->
+    <springProfile name="prod,production">
+        <!-- Production: faqat fayl -->
+        <root level="INFO">
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="!prod,!production">
+        <!-- Development: konsol + fayl -->
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+</configuration>
