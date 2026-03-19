@@ -1,0 +1,60 @@
+databases:
+  - name: murojaatbot-db
+    plan: free
+    databaseName: murojaatlar_db
+    user: murojaatbot
+
+services:
+  - type: web
+    name: murojaatbot
+    plan: free
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /actuator/health
+
+    envVars:
+      # ── Ma'lumotlar bazasi (Render avtomatik bog'laydi) ──────────────
+      - key: SPRING_DATASOURCE_URL
+        fromDatabase:
+          name: murojaatbot-db
+          property: connectionString
+        # Render jdbc:// o'rniga postgresql:// beradi — konvertatsiya kerak
+        # Quyida JAVA_OPTS orqali hal qilinadi
+
+      - key: SPRING_DATASOURCE_USERNAME
+        fromDatabase:
+          name: murojaatbot-db
+          property: user
+
+      - key: SPRING_DATASOURCE_PASSWORD
+        fromDatabase:
+          name: murojaatbot-db
+          property: password
+
+      - key: SPRING_DATASOURCE_URL
+        fromDatabase:
+          name: murojaatbot-db
+          property: connectionString
+
+      # ── Majburiy sozlamalar (Render dashboard da kiriting) ───────────
+      - key: JWT_SECRET
+        sync: false          # Dashboard da qo'lda kiriting
+
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false          # Dashboard da qo'lda kiriting
+
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false          # Dashboard da qo'lda kiriting
+
+      - key: TELEGRAM_ADMIN_CHAT_IDS
+        sync: false          # Dashboard da qo'lda kiriting
+
+      # ── Avtomatik sozlamalar ─────────────────────────────────────────
+      - key: SPRING_PROFILES_ACTIVE
+        value: render
+
+      - key: SERVER_PORT
+        value: "8080"
+
+      - key: CORS_ALLOWED_ORIGINS
+        value: "*"
