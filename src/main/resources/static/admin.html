@@ -1009,10 +1009,12 @@
       <div class="dgl">Ko'rilgan</div><div class="dgv">${app.viewedAt?fdt(app.viewedAt):'<span style="color:var(--amber)">Ko\'rilmagan</span>'}</div>
       <div class="dgl">Javob vaqti</div><div class="dgv">${app.repliedAt?fdt(app.repliedAt):'<span style="color:var(--muted)">—</span>'}</div>
     </div>
-    ${app.fileId?`<div class="slabel2">📎 Fayl</div>
-    <div style="display:flex;gap:8px;margin-bottom:14px">
-      <button class="btn btn-sm btn-v" onclick="dlTgFile(${app.id})">⬇️ Serverga saqlash</button>
-      <button class="btn btn-sm btn-s" onclick="dlFile('/admin/files/${app.id}/save','fayl_${app.id}')">💾 Yuklab olish</button>
+    ${app.fileId?`<div class="slabel2">📎 Fayl <span style="opacity:.5;font-size:.8em">${mlabel(app.fileType)}</span></div>
+    <div id="fprev-${app.id}" style="margin-bottom:10px">${fpreview(app)}</div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+      <button class="btn btn-sm btn-v" onclick="streamFile(${app.id},'${app.fileType||''}',false)">💾 Yuklab olish</button>
+      ${isViewable(app.fileType)?`<button class="btn btn-sm btn-s" onclick="streamFile(${app.id},'${app.fileType||''}',true)">👁 Ko'rish</button>`:''}
+      <button class="btn btn-sm btn-s" style="opacity:.6;font-size:.8em" onclick="dlTgAndSave(${app.id})" title="Serverga saqlash (ixtiyoriy)">⬇️ Serverga saqlash</button>
     </div>`:''}
     ${app.adminReply?`<div class="slabel2">📬 Berilgan javob</div>
     <div class="dbox" style="border-color:rgba(56,214,114,.2);background:rgba(56,214,114,.03)">${esc(app.adminReply)}</div>`:''}
@@ -1059,10 +1061,57 @@
         const res=await af(`/admin/categories/${id}`,{method:'PATCH',body:JSON.stringify({category})});
         if(res?.ok) toast('✅ Kategoriya yangilandi','ok');
     }
-    async function dlTgFile(appId){
-        toast('⏳ Telegram dan yuklanmoqda…','inf');
+    // ── Telegram → brauzer (to'g'ridan, server diskiga saqlamasdan) ──────
+    async function streamFile(appId, fileType, inline){
+        toast('⏳ Yuklanmoqda…','inf');
+        try{
+            const res=await fetch(`${API}/admin/files/${appId}/stream?inline=${inline}`,{headers:H()});
+            if(!res.ok){
+                const errData=await res.json().catch(()=>({error:'Noma\'lum xato'}));
+                toast('❌ '+(errData.error||'Yuklab olishda xatolik: '+res.status),'er');
+                return;
+            }
+            const blob=await res.blob();
+            if(inline){
+                const url=URL.createObjectURL(blob);
+                window.open(url,'_blank');
+                setTimeout(()=>URL.revokeObjectURL(url),60000);
+                toast('✅ Yangi tabda ochildi','ok');
+            } else {
+                const cd=res.headers.get('Content-Disposition')||'';
+                const match=cd.match(/filename="?([^";\n]+)"?/);
+                const filename=match?match[1]:`fayl_${appId}`;
+                const a=document.createElement('a');
+                a.href=URL.createObjectURL(blob);a.download=filename;
+                document.body.appendChild(a);a.click();a.remove();
+                URL.revokeObjectURL(a.href);
+                toast('✅ Yuklandi: '+filename,'ok');
+            }
+        }catch(e){toast('❌ '+e.message,'er');}
+    }
+    // ── Serverga saqlash (ixtiyoriy, eski xatti-harakat) ───────────────────
+    async function dlTgAndSave(appId){
+        toast('⏳ Telegram dan serverga saqlanmoqda…','inf');
         const res=await af(`/admin/files/${appId}/download`,{method:'POST'});
-        if(res?.ok){const d=await res.json();toast(`✅ Saqlandi: ${d.fileName}`,'ok');}
+        if(res?.ok){const d=await res.json();toast(`✅ Serverga saqlandi: ${d.fileName}`,'ok');}
+        else if(res){const d=await res.json().catch(()=>({}));toast('❌ '+(d.error||'Xatolik'),'er');}
+    }
+    // ── Fayl turi bo'yicha inline preview HTML ─────────────────────
+    function fpreview(app){
+        if(!app.fileId) return '';
+        const url=`${API}/admin/files/${app.id}/stream?inline=true`;
+        const t=(app.fileType||'').toLowerCase();
+        if(t==='photo')
+            return `<img src="${url}" style="max-width:100%;max-height:260px;border-radius:8px;cursor:pointer" onclick="window.open(this.src,'_blank')" onerror="this.style.display='none'" loading="lazy">`;
+        if(t==='video'||t==='video_note')
+            return `<video controls style="max-width:100%;max-height:240px;border-radius:8px"><source src="${url}"><span style="opacity:.5">Video yuklanmadi</span></video>`;
+        if(t==='audio'||t==='voice')
+            return `<audio controls style="width:100%"><source src="${url}"><span style="opacity:.5">Audio yuklanmadi</span></audio>`;
+        return '';
+    }
+    // ── Preview ko'rish tugmasi kerakmi? ───────────────────────────
+    function isViewable(t){
+        return ['photo','video','video_note','audio','voice'].includes((t||'').toLowerCase());
     }
     async function delApp(id){
         if(!confirm(`#${id} murojaatni o'chirishni tasdiqlaysizmi?`)) return;
