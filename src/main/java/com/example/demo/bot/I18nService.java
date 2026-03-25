@@ -4,7 +4,13 @@ import org.springframework.stereotype.Component;
 
 /**
  * I18nService — Ko'p tilli matnlar (uz, ru, en).
- * ConversationBot getText() o'rniga shu klass ishlatiladi.
+ *
+ * O'zgarishlar (v8):
+ *   - ask_fullname  — ism-familya so'rash
+ *   - ask_phone     — telefon raqami so'rash
+ *   - contact_saved — kontakt saqlandi
+ *   - deadline_info — deadline ma'lumoti
+ *   - deadline_overdue — deadline o'tib ketdi (foydalanuvchiga)
  */
 @Component
 public class I18nService {
@@ -21,12 +27,16 @@ public class I18nService {
     private String uz(String key) {
         return switch (key) {
             case "welcome"           -> "Assalomu alaykum! Tilni tanlang:\nЗдравствуйте! Выберите язык:\nHello! Select a language:";
+            case "ask_fullname"      -> "👤 Ism va familyangizni kiriting (masalan: Aliyev Akbar):";
+            case "ask_phone"         -> "📱 Telefon raqamingizni kiriting yoki pastdagi tugmani bosing:";
+            case "contact_saved"     -> "✅ Ma'lumotlaringiz saqlandi!";
             case "ask_desc"          -> "📝 Murojaatingizni yuboring. Rasm, fayl, audio yoki video ham yuborishingiz mumkin. 😊";
             case "ask_additional"    -> "📎 Qo'shimcha ma'lumot yuboring (matn, rasm, fayl, audio, video):";
             case "thanks"            -> "✅ Murojaatingiz qabul qilindi.\nMutaxassislarimiz tez orada bog'lanadi.";
             case "additional_saved"  -> "➕ Qo'shimcha ma'lumot qo'shildi.";
             case "id"                -> "🔖 Murojaat raqami: #{id}";
             case "time"              -> "🕐 Yuborilgan vaqt: {time}";
+            case "deadline_info"     -> "📅 Bajarish muddati: {deadline}";
             case "status"            -> "📌 Holat: ⏳ Ko'rib chiqilmoqda";
             case "btn_add_more"      -> "➕ Qo'shimcha yuborish";
             case "btn_check_status"  -> "📊 Holatni tekshirish";
@@ -53,6 +63,9 @@ public class I18nService {
             case "error_user"        -> "⚠️ Xatolik yuz berdi. Qayta urinib ko'ring yoki /start bosing.";
             case "chat_timeout"      -> "⏱ Suxbat faolsizlik sababli yakunlandi (30 daqiqa).";
             case "media_album_note"  -> "📷 Album qabul qilindi. Bitta murojaat sifatida saqlanadi.";
+            case "deadline_overdue"  -> "⚠️ #{id} raqamli murojaatingiz bajarish muddati ({deadline}) o'tib ketdi. Tez orada javob beriladi.";
+            case "invalid_phone" -> "📱 Noto'g'ri raqam. Iltimos, to'g'ri telefon raqam kiriting:";
+
             default -> "Xatolik yuz berdi. Qayta urinib ko'ring.";
         };
     }
@@ -61,12 +74,16 @@ public class I18nService {
     private String ru(String key) {
         return switch (key) {
             case "welcome"           -> "Assalomu alaykum! Tilni tanlang:\nЗдравствуйте! Выберите язык:\nHello! Select a language:";
+            case "ask_fullname"      -> "👤 Введите ваше имя и фамилию (например: Иванов Иван):";
+            case "ask_phone"         -> "📱 Введите номер телефона или нажмите кнопку ниже:";
+            case "contact_saved"     -> "✅ Ваши данные сохранены!";
             case "ask_desc"          -> "📝 Опишите ваше обращение. Можно отправить фото, файл, аудио или видео. 😊";
             case "ask_additional"    -> "📎 Отправьте дополнительную информацию (текст, фото, файл, аудио, видео):";
             case "thanks"            -> "✅ Ваше обращение принято.\nНаши специалисты свяжутся с вами.";
             case "additional_saved"  -> "➕ Дополнительная информация добавлена.";
             case "id"                -> "🔖 Номер обращения: #{id}";
             case "time"              -> "🕐 Время подачи: {time}";
+            case "deadline_info"     -> "📅 Срок исполнения: {deadline}";
             case "status"            -> "📌 Статус: ⏳ На рассмотрении";
             case "btn_add_more"      -> "➕ Добавить информацию";
             case "btn_check_status"  -> "📊 Проверить статус";
@@ -93,6 +110,8 @@ public class I18nService {
             case "error_user"        -> "⚠️ Произошла ошибка. Попробуйте снова или нажмите /start.";
             case "chat_timeout"      -> "⏱ Чат завершён из-за неактивности (30 минут).";
             case "media_album_note"  -> "📷 Альбом получен. Будет сохранён как одно обращение.";
+            case "deadline_overdue"  -> "⚠️ Срок исполнения обращения №{id} ({deadline}) истёк. Скоро ответим.";
+            case "invalid_phone" -> "📱 Неверный номер. Введите корректный номер телефона:";
             default -> "Произошла ошибка. Попробуйте снова.";
         };
     }
@@ -101,12 +120,16 @@ public class I18nService {
     private String en(String key) {
         return switch (key) {
             case "welcome"           -> "Assalomu alaykum! Tilni tanlang:\nЗдравствуйте! Выберите язык:\nHello! Select a language:";
+            case "ask_fullname"      -> "👤 Please enter your full name (e.g. John Smith):";
+            case "ask_phone"         -> "📱 Please enter your phone number or press the button below:";
+            case "contact_saved"     -> "✅ Your information has been saved!";
             case "ask_desc"          -> "📝 Please describe your request. You can also send photos, files, audio, or video. 😊";
             case "ask_additional"    -> "📎 Send additional information (text, photo, file, audio, video):";
             case "thanks"            -> "✅ Your request has been received.\nOur specialists will contact you soon.";
             case "additional_saved"  -> "➕ Additional information has been added.";
             case "id"                -> "🔖 Request ID: #{id}";
             case "time"              -> "🕐 Submitted: {time}";
+            case "deadline_info"     -> "📅 Deadline: {deadline}";
             case "status"            -> "📌 Status: ⏳ Under review";
             case "btn_add_more"      -> "➕ Add more info";
             case "btn_check_status"  -> "📊 Check status";
@@ -133,6 +156,8 @@ public class I18nService {
             case "error_user"        -> "⚠️ An error occurred. Please try again or press /start.";
             case "chat_timeout"      -> "⏱ Chat session ended due to inactivity (30 minutes).";
             case "media_album_note"  -> "📷 Album received. It will be saved as a single request.";
+            case "deadline_overdue"  -> "⚠️ The deadline ({deadline}) for request #{id} has passed. We'll respond soon.";
+            case "invalid_phone" -> "📱 Invalid number. Please enter a correct phone number:";
             default -> "An error occurred. Please try again.";
         };
     }

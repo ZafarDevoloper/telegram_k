@@ -1,5 +1,6 @@
 package com.example.demo.bot;
 
+import com.example.demo.enums.ApplicationSection;
 import com.example.demo.enums.ApplicationStatus;
 import com.example.demo.enums.BotState;
 import com.example.demo.enums.Priority;
@@ -33,14 +34,20 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * ConversationBot v7.0
+ * ConversationBot v8.0
  *
- * O'zgarishlar (v6.0 → v7.0):
- *   - String STATE_* konstantlari → BotState enum (compile-time xavfsizlik)
- *   - System.out/err + e.printStackTrace() → SLF4J Logger
- *   - BotRestartNotifier uchun AbsSender bean sifatida ishlaydi
- *   - checkChatTimeouts() da snapshot pattern (CME oldini olish) saqlanib qoldi
- *   - Barcha mavjud funksionallik o'zgarmadi
+ * Yangiliklar (v7.0 → v8.0):
+ *   1. Foydalanuvchi oqimi: Til → Ism-familya → Telefon → Murojaat tavsifi
+ *      (avval: Til → Murojaat tavsifi)
+ *   2. Admin bo'lim belgilash:
+ *      - Har bir yangi murojaatda admin "Oddiy bo'lim" yoki "Shoshilinch bo'lim"
+ *        tugmasini bosadi
+ *      - Tanlangandan keyin muddat avtomatik qo'yiladi:
+ *          NORMAL  → +10 kun
+ *          URGENT  → +5  kun
+ *      - Admin ixtiyoriy ravishda muddatni o'zi ham kirita oladi (/setdeadline ID KUN)
+ *   3. Foydalanuvchiga bo'lim + muddat haqida bildiriladi
+ *   4. CB_SECTION_NRM / CB_SECTION_URG yangi callback konstantlari
  */
 @Component
 public class ConversationBot extends TelegramLongPollingBot {
@@ -56,8 +63,8 @@ public class ConversationBot extends TelegramLongPollingBot {
     private final I18nService            i18n;
 
     // ─── Config ────────────────────────────────────────────────────────────
-    @Value("${telegram.bot.token}")    private String botToken;
-    @Value("${telegram.bot.username}") private String botUsername;
+    @Value("${telegram.bot.token}")      private String botToken;
+    @Value("${telegram.bot.username}")   private String botUsername;
     @Value("${telegram.admin.chat.ids}") private String adminChatIdsRaw;
 
     private final Set<String> adminChatIds = ConcurrentHashMap.newKeySet();
@@ -67,23 +74,35 @@ public class ConversationBot extends TelegramLongPollingBot {
     private static final long MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
     private static final long CHAT_TIMEOUT_MS     = 30L * 60 * 1000;
 
+    /** Muddat (kun): NORMAL bo'lim */
+    private static final int DEADLINE_NORMAL_DAYS = 10;
+    /** Muddat (kun): URGENT (shoshilinch) bo'lim */
+    private static final int DEADLINE_URGENT_DAYS = 5;
+
     // ─── Callback konstantlari ─────────────────────────────────────────────
-    private static final String CB_CHECK_STATUS = "check_";
-    private static final String CB_ADD_MORE     = "add_more";
-    private static final String CB_EXPORT_ALL   = "export_word";
-    private static final String CB_EXPORT_ONE   = "export_one_";
-    private static final String CB_VIEWED       = "viewed_";
-    private static final String CB_REPLY        = "reply_";
-    private static final String CB_PRIORITY_URG = "prio_urgent_";
-    private static final String CB_PRIORITY_NRM = "prio_normal_";
-    private static final String CB_MY_APPS      = "my_apps";
-    private static final String CB_START_CHAT   = "start_chat_";
-    private static final String CB_END_CHAT     = "end_chat_";
-    private static final String CB_FORWARD_FILE = "fwd_file_";
-    private static final String CB_CLOSE_APP    = "close_app_";
+    private static final String CB_CHECK_STATUS  = "check_";
+    private static final String CB_ADD_MORE      = "add_more";
+    private static final String CB_EXPORT_ALL    = "export_word";
+    private static final String CB_EXPORT_ONE    = "export_one_";
+    private static final String CB_VIEWED        = "viewed_";
+    private static final String CB_REPLY         = "reply_";
+    private static final String CB_PRIORITY_URG  = "prio_urgent_";
+    private static final String CB_PRIORITY_NRM  = "prio_normal_";
+    private static final String CB_MY_APPS       = "my_apps";
+    private static final String CB_START_CHAT    = "start_chat_";
+    private static final String CB_END_CHAT      = "end_chat_";
+    private static final String CB_FORWARD_FILE  = "fwd_file_";
+    private static final String CB_CLOSE_APP     = "close_app_";
+    /** [YANGI] Bo'lim callback-lari */
+    private static final String CB_SECTION_NRM   = "sect_normal_";
+    private static final String CB_SECTION_URG   = "sect_urgent_";
 
     // ─── Chat timeout tracking ─────────────────────────────────────────────
     private final Map<String, Long> chatLastActivity = new ConcurrentHashMap<>();
+
+    // ─── Admin: muddat kiritish uchun qaysi appId kutilmoqda ──────────────
+    // key = adminChatId, value = appId
+    private final Map<String, Long> pendingDeadlineInput = new ConcurrentHashMap<>();
 
     // ─── Constructor ───────────────────────────────────────────────────────
     public ConversationBot(ApplicationRepository repository,
@@ -175,8 +194,9 @@ public class ConversationBot extends TelegramLongPollingBot {
                     case "/start" -> {
                         state.clearAll(chatId);
                         if (state.hasStoredLang(chatId)) {
-                            state.setState(chatId, BotState.DESCRIPTION);
-                            sendMessage(chatId, i18n.get(lang, "ask_desc"));
+                            // Til tanlangan — ism so'rash
+                            state.setState(chatId, BotState.FULL_NAME);
+                            sendMessage(chatId, i18n.get(lang, "ask_fullname"));
                         } else {
                             sendLanguageSelection(chatId);
                             state.setState(chatId, BotState.LANGUAGE);
@@ -193,6 +213,8 @@ public class ConversationBot extends TelegramLongPollingBot {
                 BotState currentState = state.getState(chatId).orElse(BotState.LANGUAGE);
                 switch (currentState) {
                     case LANGUAGE    -> handleLanguageSelection(chatId, text);
+                    case FULL_NAME        -> handleNameInput(chatId, text);
+                    case PHONE       -> handlePhoneInput(chatId, text);
                     case DESCRIPTION -> handleDescription(chatId, text);
                     case ADDITIONAL  -> handleAdditional(chatId, text);
                     default          -> sendMessage(chatId, i18n.get(lang, "restart"));
@@ -252,11 +274,111 @@ public class ConversationBot extends TelegramLongPollingBot {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    //  [YANGI] ISM VA TELEFON OQIMI
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * BotState.NAME — foydalanuvchi ism-familyasini kiritadi.
+     * Ism validatsiya: kamida 2 ta belgi, matn bo'lishi shart.
+     */
+    private void handleNameInput(String chatId, String text) throws TelegramApiException {
+        String lang = state.getLang(chatId);
+        if (text == null || text.trim().length() < 2) {
+            sendMessage(chatId, i18n.get(lang, "ask_fullname"));
+            return;
+        }
+        // Ismni state ga saqlash (keyinchalik application ga yoziladi)
+        state.setFullName(chatId, text.trim());   // fullNames map ga yozadi ✅
+        // Keyingi qadam: telefon
+        state.setState(chatId, BotState.PHONE);
+
+        // Telefon raqamni tugma bilan ham yuborish imkoni
+        SendMessage msg = new SendMessage(chatId, i18n.get(lang, "ask_phone"));
+        ReplyKeyboardMarkup markup = new ReplyKeyboardMarkup();
+        markup.setResizeKeyboard(true);
+        markup.setOneTimeKeyboard(true);
+        KeyboardRow row = new KeyboardRow();
+        KeyboardButton phoneBtn = new KeyboardButton();
+        phoneBtn.setText(switch (lang) {
+            case "en" -> "📞 Share my phone number";
+            case "ru" -> "📞 Поделиться номером";
+            default   -> "📞 Telefon raqamimni yuborish";
+        });
+        phoneBtn.setRequestContact(true);
+        row.add(phoneBtn);
+        markup.setKeyboard(List.of(row));
+        msg.setReplyMarkup(markup);
+        execute(msg);
+    }
+
+    /**
+     * BotState.PHONE — telefon raqamni qabul qiladi.
+     * Kontakt tugmasi YOKI qo'lda kiritilgan raqam qabul qilinadi.
+     */
+    private void handlePhoneInput(String chatId, String text) throws TelegramApiException {
+        String lang = state.getLang(chatId);
+        String phone = extractPhone(text);
+        if (phone == null) {
+            sendMessage(chatId, i18n.get(lang, "invalid_phone"));
+            return;
+        }
+        // Telefon raqamni saqlash (BotStateService da yangi method)
+        state.setPhoneNumber(chatId, phone);
+
+        // Keyingi qadam: murojaat tavsifi
+        state.setState(chatId, BotState.DESCRIPTION);
+
+        SendMessage msg = new SendMessage(chatId, i18n.get(lang, "ask_desc"));
+        msg.setReplyMarkup(new ReplyKeyboardRemove(true));
+        execute(msg);
+    }
+
+    /**
+     * Xabar kontakt bo'lsa — telefon undan olinadi.
+     * Matn bo'lsa — regex orqali tekshiriladi.
+     * Noto'g'ri format → null.
+     */
+    private String extractPhone(String text) {
+        if (text == null) return null;
+        // +998XXXXXXXXX yoki 998XXXXXXXXX yoki 0XXXXXXXXX formatlarini qabul qiladi
+        String cleaned = text.replaceAll("\\s+", "");
+        if (cleaned.matches("^\\+?[0-9]{9,15}$")) return cleaned;
+        return null;
+    }
+
+    /**
+     * Kontakt xabari orqali telefon yuborilganda.
+     * onUpdateReceived da media handler ga o'tmasdan bu yerga yo'naltiriladi.
+     */
+    private void handleContactAsPhone(String chatId, Contact contact) throws TelegramApiException {
+        String lang = state.getLang(chatId);
+        if (!state.hasState(chatId, BotState.PHONE)) return;
+
+        String phone = contact.getPhoneNumber();
+        if (phone == null || phone.isBlank()) {
+            sendMessage(chatId, i18n.get(lang, "invalid_phone"));
+            return;
+        }
+        state.setPhoneNumber(chatId, phone);
+        state.setState(chatId, BotState.DESCRIPTION);
+
+        SendMessage msg = new SendMessage(chatId, i18n.get(lang, "ask_desc"));
+        msg.setReplyMarkup(new ReplyKeyboardRemove(true));
+        execute(msg);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     //  MEDIA XABARLARNI QABUL QILISH
     // ═══════════════════════════════════════════════════════════════════════
     private void handleIncomingMedia(String chatId, Message message) throws TelegramApiException {
         String lang = state.getLang(chatId);
         BotState currentState = state.getState(chatId).orElse(null);
+
+        // [YANGI] Agar PHONE holatida kontakt yuborganbo'lsa
+        if (currentState == BotState.PHONE && message.hasContact()) {
+            handleContactAsPhone(chatId, message.getContact());
+            return;
+        }
 
         if (currentState != BotState.DESCRIPTION && currentState != BotState.ADDITIONAL) {
             sendMessage(chatId, i18n.get(lang, "send_file_hint"));
@@ -588,6 +710,7 @@ public class ConversationBot extends TelegramLongPollingBot {
     //  ADMIN XABARLARI
     // ═══════════════════════════════════════════════════════════════════════
     private void handleAdminMessage(Message message, String chatId) throws TelegramApiException {
+        // ─── Faol suxbat ──────────────────────────────────────────────────
         Optional<String> targetUser = state.getChatTarget(chatId);
         if (targetUser.isPresent()) {
             if (message.hasText() && "/endchat".equalsIgnoreCase(message.getText().trim())) {
@@ -598,6 +721,7 @@ public class ConversationBot extends TelegramLongPollingBot {
             return;
         }
 
+        // ─── Admin javob yozmoqda ─────────────────────────────────────────
         if (state.hasState(chatId, BotState.ADMIN_REPLY) && message.hasText()) {
             state.getAdminReplyTarget(chatId).ifPresent(appId -> {
                 handleAdminReplyToApp(appId, message.getText().trim(), chatId);
@@ -607,6 +731,17 @@ public class ConversationBot extends TelegramLongPollingBot {
             return;
         }
 
+        // ─── [YANGI] Admin muddatni qo'lda kiritmoqda ─────────────────────
+        if (state.hasState(chatId, BotState.DEADLINE) && message.hasText()) {
+            Long appId = pendingDeadlineInput.remove(chatId);
+            if (appId != null) {
+                handleCustomDeadlineInput(chatId, appId, message.getText().trim());
+                state.removeState(chatId);
+            }
+            return;
+        }
+
+        // ─── Broadcast ────────────────────────────────────────────────────
         if (state.hasState(chatId, BotState.BROADCAST) && message.hasText()) {
             handleBroadcastSend(chatId, message.getText().trim());
             state.removeState(chatId);
@@ -636,24 +771,29 @@ public class ConversationBot extends TelegramLongPollingBot {
             } else {
                 sendMessage(chatId, "Format: /close [murojaat_id]");
             }
+        } else if (text.toLowerCase().startsWith("/setdeadline")) {
+            // /setdeadline ID KUN — masalan: /setdeadline 5 7  → murojaat #5 ga 7 kunlik muddat
+            handleSetDeadlineCommand(chatId, text);
         } else if ("/broadcast".equalsIgnoreCase(text)) {
             state.setState(chatId, BotState.BROADCAST);
             sendMessage(chatId, "Barcha foydalanuvchilarga xabarni yozing:\n(Bekor qilish: /cancel)");
         } else if ("/cancel".equalsIgnoreCase(text)) {
             if (state.getState(chatId).isPresent()) {
                 state.removeState(chatId);
+                pendingDeadlineInput.remove(chatId);
                 sendMessage(chatId, "Bekor qilindi.");
             }
         } else if ("/help".equalsIgnoreCase(text)) {
             sendMessage(chatId, """
                     Admin buyruqlari:
-                    /list [N]   — Oxirgi N ta murojaat (default: 5)
-                    /stats      — Statistika
-                    /close ID   — Murojaatni yopish
-                    /broadcast  — Barcha foydalanuvchilarga xabar
-                    /word       — Barchani Word ga export
-                    /endchat    — Suxbatni yakunlash
-                    /cancel     — Joriy jarayonni bekor qilish
+                    /list [N]            — Oxirgi N ta murojaat (default: 5)
+                    /stats               — Statistika
+                    /close ID            — Murojaatni yopish
+                    /setdeadline ID KUN  — Muddatni o'zgartirish (masalan: /setdeadline 5 7)
+                    /broadcast           — Barcha foydalanuvchilarga xabar
+                    /word                — Barchani Word ga export
+                    /endchat             — Suxbatni yakunlash
+                    /cancel              — Joriy jarayonni bekor qilish
                     """);
         }
     }
@@ -673,8 +813,15 @@ public class ConversationBot extends TelegramLongPollingBot {
                         .append(getStatusText("uz", app.getStatus())).append("\n")
                         .append(app.getApplicantName() != null ? app.getApplicantName() : "Anonim")
                         .append(" | ")
-                        .append(app.getSubmissionTime() != null ? app.getSubmissionTime().format(fmt) : "—")
-                        .append("\n\n");
+                        .append(app.getSubmissionTime() != null ? app.getSubmissionTime().format(fmt) : "—");
+                // Bo'lim va muddat
+                if (app.getSection() != null) {
+                    sb.append(" | Bo'lim: ").append(getSectionLabel(app.getSection()));
+                }
+                if (app.getDeadline() != null) {
+                    sb.append(" | Muddat: ").append(app.getDeadline().format(fmt));
+                }
+                sb.append("\n\n");
             }
             reminderService.splitAndSend(chatId, sb.toString());
         } catch (Exception e) {
@@ -691,8 +838,21 @@ public class ConversationBot extends TelegramLongPollingBot {
             long inReview = repository.countByStatus(ApplicationStatus.IN_REVIEW);
             long replied  = repository.countByStatus(ApplicationStatus.REPLIED);
             long closed   = repository.countByStatus(ApplicationStatus.CLOSED);
-            sendMessage(chatId, ("Statistika\n\nJami: %d\nKutmoqda: %d\nKo'rib chiqilmoqda: %d\nJavob berildi: %d\nYopildi: %d")
-                    .formatted(total, pending, inReview, replied, closed));
+            long normalSection  = repository.countBySection(ApplicationSection.NORMAL);
+            long urgentSection  = repository.countBySection(ApplicationSection.URGENT);
+            long noSection      = total - normalSection - urgentSection;
+            sendMessage(chatId, ("Statistika\n\n"
+                    + "Jami: %d\n"
+                    + "Kutmoqda: %d\n"
+                    + "Ko'rib chiqilmoqda: %d\n"
+                    + "Javob berildi: %d\n"
+                    + "Yopildi: %d\n\n"
+                    + "Bo'lim:\n"
+                    + "  Oddiy: %d\n"
+                    + "  Shoshilinch: %d\n"
+                    + "  Bo'limsiz: %d")
+                    .formatted(total, pending, inReview, replied, closed,
+                            normalSection, urgentSection, noSection));
         } catch (Exception e) {
             log.error("Statistika xatolik: {}", e.getMessage());
             sendMessage(chatId, "Statistika xatolik: " + e.getMessage());
@@ -714,6 +874,66 @@ public class ConversationBot extends TelegramLongPollingBot {
                 case "ru" -> "Ваше обращение #" + appId + " закрыто.";
                 default   -> "#" + appId + " raqamli murojaatingiz yopildi.";
             });
+        }
+    }
+
+    // ─── [YANGI] Admin: /setdeadline ID KUN ───────────────────────────────
+    private void handleSetDeadlineCommand(String adminId, String text) {
+        // /setdeadline 5 7 — murojaat #5 ga 7 kunlik muddat
+        String[] parts = text.split("\\s+");
+        if (parts.length < 3) {
+            sendMessage(adminId, "Format: /setdeadline [murojaat_id] [kun_soni]\nMasalan: /setdeadline 5 7");
+            return;
+        }
+        try {
+            Long appId = Long.parseLong(parts[1]);
+            int  days  = Integer.parseInt(parts[2]);
+            if (days < 1 || days > 365) {
+                sendMessage(adminId, "Kun soni 1 dan 365 gacha bo'lishi kerak.");
+                return;
+            }
+            applyDeadline(adminId, appId, days);
+        } catch (NumberFormatException e) {
+            sendMessage(adminId, "Noto'g'ri format. /setdeadline [id] [kun]");
+        }
+    }
+
+    /**
+     * Admin muddatni qo'lda kiritmoqda (callback dan keyin).
+     * Callback: "Muddatni o'zgartirish" tugmasi bosilganda bu rejim yoqiladi.
+     */
+    private void handleCustomDeadlineInput(String adminId, Long appId, String text) {
+        try {
+            int days = Integer.parseInt(text.trim());
+            if (days < 1 || days > 365) {
+                sendMessage(adminId, "Kun soni 1 dan 365 gacha bo'lishi kerak.");
+                return;
+            }
+            applyDeadline(adminId, appId, days);
+        } catch (NumberFormatException e) {
+            sendMessage(adminId, "Faqat raqam kiriting. Masalan: 7");
+        }
+    }
+
+    /** Muddatni bazaga yozish va bildirishnoma yuborish */
+    private void applyDeadline(String adminId, Long appId, int days) {
+        var opt = repository.findById(appId);
+        if (opt.isEmpty()) { sendMessage(adminId, "Murojaat topilmadi: #" + appId); return; }
+        Application app = opt.orElseThrow();
+        LocalDateTime deadline = LocalDateTime.now().plusDays(days);
+        app.setDeadline(deadline);
+        app.setDeadlineNotified(false);   // ✅ qo'shilsin
+        repository.save(app);
+
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+        sendMessage(adminId, "✅ #" + appId + " muddati belgilandi: " + deadline.format(fmt)
+                + " (" + days + " kun)");
+
+        // Foydalanuvchiga xabar
+        if (app.getChatId() != null) {
+            String lang = app.getLang() != null ? app.getLang() : "uz";
+            String sectionName = app.getSection() != null ? getSectionLabel(app.getSection()) : "—";
+            sendMessage(app.getChatId(), buildDeadlineUserNotification(lang, appId, sectionName, deadline));
         }
     }
 
@@ -767,6 +987,20 @@ public class ConversationBot extends TelegramLongPollingBot {
             parseId(data, CB_PRIORITY_URG).ifPresent(id -> setPriority(chatId, id, Priority.URGENT));
         } else if (data.startsWith(CB_PRIORITY_NRM)) {
             parseId(data, CB_PRIORITY_NRM).ifPresent(id -> setPriority(chatId, id, Priority.NORMAL));
+
+            // ─── [YANGI] Bo'lim tanlash ────────────────────────────────────────
+        } else if (data.startsWith(CB_SECTION_NRM)) {
+            parseId(data, CB_SECTION_NRM).ifPresent(id -> assignSection(chatId, id, ApplicationSection.NORMAL));
+        } else if (data.startsWith(CB_SECTION_URG)) {
+            parseId(data, CB_SECTION_URG).ifPresent(id -> assignSection(chatId, id, ApplicationSection.URGENT));
+
+        } else if (data.startsWith("custom_deadline_")) {
+            // "custom_deadline_42" — admin o'zi muddat kiritmahdi
+            parseId(data, "custom_deadline_").ifPresent(appId -> {
+                pendingDeadlineInput.put(chatId, appId);
+                state.setState(chatId, BotState.DEADLINE);
+                sendMessage(chatId, "#" + appId + " uchun necha kun muddat belgilamoqchisiz? (raqam kiriting)");
+            });
         } else if (data.startsWith(CB_START_CHAT)) {
             parseId(data, CB_START_CHAT).ifPresent(appId -> startChatSession(chatId, appId));
         } else if (data.startsWith(CB_END_CHAT)) {
@@ -782,6 +1016,92 @@ public class ConversationBot extends TelegramLongPollingBot {
         } else if (data.startsWith(CB_CLOSE_APP)) {
             parseId(data, CB_CLOSE_APP).ifPresent(appId -> handleAdminClose(chatId, appId));
         }
+    }
+
+    // ─── [YANGI] Bo'lim belgilash ──────────────────────────────────────────
+    /**
+     * Admin "Oddiy bo'lim" yoki "Shoshilinch bo'lim" tugmasini bosadi.
+     *
+     * Logika:
+     *   1. section → NORMAL yoki URGENT
+     *   2. deadline avtomatik qo'yiladi (NORMAL→+10kun, URGENT→+5kun)
+     *   3. Foydalanuvchiga xabar yuboriladi
+     *   4. Admin muddat o'zgartirish imkoniga ega (tugma)
+     */
+    private void assignSection(String adminId, Long appId, ApplicationSection section) {
+        var opt = repository.findById(appId);
+        if (opt.isEmpty()) { sendMessage(adminId, "Murojaat topilmadi: #" + appId); return; }
+
+        Application app = opt.orElseThrow();
+        app.setSection(section);
+
+        int days = (section == ApplicationSection.URGENT) ? DEADLINE_URGENT_DAYS : DEADLINE_NORMAL_DAYS;
+        LocalDateTime deadline = LocalDateTime.now().plusDays(days);
+        app.setDeadline(deadline);
+        app.setDeadlineNotified(false);   // ✅ bu yerga ham qo'shilsin
+        repository.save(app);
+
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+        String sectionLabel = getSectionLabel(section);
+
+        // Admin ga tasdiqlash
+        sendMessage(adminId, String.format(
+                "✅ Murojaat #%d\n"
+                        + "Bo'lim: %s\n"
+                        + "Muddat: %s (%d kun)\n\n"
+                        + "Muddatni o'zgartirish uchun: /setdeadline %d [kun]",
+                appId, sectionLabel, deadline.format(fmt), days, appId));
+
+        // Admin klaviaturasi: muddat o'zgartirish tugmasi
+        try {
+            SendMessage msg = new SendMessage(adminId, "Muddatni o'zgartirishni xohlaysizmi?");
+            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+            InlineKeyboardButton changeBtn = new InlineKeyboardButton();
+            changeBtn.setText("Muddatni o'zgartirish (#" + appId + ")");
+            changeBtn.setCallbackData("custom_deadline_" + appId);
+            markup.setKeyboard(List.of(List.of(changeBtn)));
+            msg.setReplyMarkup(markup);
+            execute(msg);
+        } catch (TelegramApiException e) {
+            log.error("assignSection muddat tugma yuborishda xato: {}", e.getMessage());
+        }
+
+        // Foydalanuvchiga xabar
+        if (app.getChatId() != null) {
+            String lang = app.getLang() != null ? app.getLang() : "uz";
+            sendMessage(app.getChatId(), buildDeadlineUserNotification(lang, appId, sectionLabel, deadline));
+        }
+
+        // Boshqa adminlarga xabar
+        notifyOtherAdmins(adminId, "Murojaat #" + appId + " → " + sectionLabel + " bo'limiga o'tkazildi. Muddat: " + deadline.format(fmt));
+    }
+
+    /** Foydalanuvchiga bo'lim va muddat haqida xabar matni */
+    private String buildDeadlineUserNotification(String lang, Long appId,
+                                                 String sectionLabel, LocalDateTime deadline) {
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+        return switch (lang) {
+            case "en" -> String.format(
+                    "Your request #%d has been assigned to the '%s' section.\n"
+                            + "Expected response deadline: %s",
+                    appId, sectionLabel, deadline.format(fmt));
+            case "ru" -> String.format(
+                    "Ваше обращение #%d направлено в раздел '%s'.\n"
+                            + "Ожидаемый срок ответа: %s",
+                    appId, sectionLabel, deadline.format(fmt));
+            default -> String.format(
+                    "#%d raqamli murojaatingiz '%s' bo'limiga yo'naltirildi.\n"
+                            + "Javob berish muddati: %s",
+                    appId, sectionLabel, deadline.format(fmt));
+        };
+    }
+
+    // ─── Bo'lim label ─────────────────────────────────────────────────────
+    private String getSectionLabel(ApplicationSection section) {
+        return switch (section) {
+            case NORMAL -> "Oddiy bo'lim";
+            case URGENT -> "Shoshilinch bo'lim";
+        };
     }
 
     // ─── Admin faylni qayta olishi ────────────────────────────────────────
@@ -925,8 +1245,9 @@ public class ConversationBot extends TelegramLongPollingBot {
             return;
         }
         state.setLang(chatId, lang);
-        state.setState(chatId, BotState.DESCRIPTION);
-        SendMessage msg = new SendMessage(chatId, i18n.get(lang, "ask_desc"));
+        // [YANGI] Til → Ism so'rash
+        state.setState(chatId, BotState.FULL_NAME);
+        SendMessage msg = new SendMessage(chatId, i18n.get(lang, "ask_fullname"));
         msg.setReplyMarkup(new ReplyKeyboardRemove(true));
         execute(msg);
     }
@@ -1065,12 +1386,21 @@ public class ConversationBot extends TelegramLongPollingBot {
                 : "\n\n" + i18n.get(lang, "no_reply");
         String mediaInfo = app.getFileType() != null ? "\n" + getMediaTag(app.getFileType()) : "";
 
-        sendMessage(chatId, String.format("%s#%d\n\n%s: %s\n%s\n%s%s%s",
+        // [YANGI] Bo'lim va muddat ma'lumoti
+        String sectionInfo = "";
+        if (app.getSection() != null) {
+            sectionInfo += "\nBo'lim: " + getSectionLabel(app.getSection());
+        }
+        if (app.getDeadline() != null) {
+            sectionInfo += "\nMuddat: " + app.getDeadline().format(fmt);
+        }
+
+        sendMessage(chatId, String.format("%s#%d\n\n%s: %s\n%s\n%s%s%s%s",
                 getPriorityTag(app.getPriority()), app.getId(),
                 i18n.get(lang, "status_label"), getStatusText(lang, app.getStatus()),
                 viewedText,
                 app.getSubmissionTime() != null ? app.getSubmissionTime().format(fmt) : "—",
-                mediaInfo, replyText));
+                mediaInfo, sectionInfo, replyText));
     }
 
     // ─── Ko'rdim ──────────────────────────────────────────────────────────
@@ -1120,6 +1450,10 @@ public class ConversationBot extends TelegramLongPollingBot {
     }
 
     // ─── Admin notification ───────────────────────────────────────────────
+    /**
+     * [YANGI] Yangi murojaat kelganda admin klaviaturasida bo'lim tanlash tugmalari qo'shildi.
+     * Admin avval bo'limni tanlaydi → muddat avtomatik belgilanadi.
+     */
     private void sendAdminNotification(Application app) {
         try {
             boolean isUrgent = Priority.URGENT == app.getPriority();
@@ -1128,13 +1462,17 @@ public class ConversationBot extends TelegramLongPollingBot {
                     ? "\nMedia: " + getMediaTag(app.getFileType()) : "";
             String applicantDisplay = app.getApplicantName() != null && !app.getApplicantName().equals("Anonim")
                     ? "Kim: " + app.getApplicantName() + "\n" : "";
+            // [YANGI] Telefon raqami
+            String phoneDisplay = app.getPhoneNumber() != null && !app.getPhoneNumber().isBlank()
+                    ? "Tel: " + app.getPhoneNumber() + "\n" : "";
 
-            String text = ("%s\n\n%sID: #%d\n%sTil: %s\nSana: %s%s\nMazmun:\n%s")
+            String text = ("%s\n\n%sID: #%d\n%s%sTil: %s\nSana: %s%s\nMazmun:\n%s")
                     .formatted(
                             header,
                             getPriorityTag(app.getPriority()),
                             app.getId(),
                             applicantDisplay,
+                            phoneDisplay,
                             app.getLang() != null ? app.getLang().toUpperCase() : "—",
                             app.getSubmissionTime().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")),
                             mediaInfo,
@@ -1153,31 +1491,54 @@ public class ConversationBot extends TelegramLongPollingBot {
         }
     }
 
+    /**
+     * [YANGI] Admin klaviaturasiga bo'lim tanlash tugmalari qo'shildi.
+     *
+     *   [Javob berish]
+     *   [Ko'rdim]  [Word]
+     *   [Oddiy bo'lim]  [Shoshilinch bo'lim]   ← YANGI qator
+     *   [Suxbat boshlash]  [Yopish]
+     *   [Word (barchasi)]
+     */
     private InlineKeyboardMarkup buildAdminKeyboard(Long appId, boolean hasFile) {
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
 
+        // 1. Javob berish
         InlineKeyboardButton replyBtn = new InlineKeyboardButton();
         replyBtn.setText("Javob berish"); replyBtn.setCallbackData(CB_REPLY + appId);
         rows.add(List.of(replyBtn));
 
+        // 2. Ko'rdim + Word
         InlineKeyboardButton viewedBtn = new InlineKeyboardButton();
         viewedBtn.setText("Ko'rdim"); viewedBtn.setCallbackData(CB_VIEWED + appId);
         InlineKeyboardButton exportBtn = new InlineKeyboardButton();
         exportBtn.setText("Word"); exportBtn.setCallbackData(CB_EXPORT_ONE + appId);
         rows.add(List.of(viewedBtn, exportBtn));
 
+        // 3. Fayl (ixtiyoriy)
         if (hasFile) {
             InlineKeyboardButton fileBtn = new InlineKeyboardButton();
             fileBtn.setText("Faylni yuklab olish"); fileBtn.setCallbackData(CB_FORWARD_FILE + appId);
             rows.add(List.of(fileBtn));
         }
 
+        // 4. [YANGI] Bo'lim tanlash: Oddiy | Shoshilinch
+        InlineKeyboardButton normalSectBtn = new InlineKeyboardButton();
+        normalSectBtn.setText("📋 Oddiy bo'lim");
+        normalSectBtn.setCallbackData(CB_SECTION_NRM + appId);
+        InlineKeyboardButton urgentSectBtn = new InlineKeyboardButton();
+        urgentSectBtn.setText("🚨 Shoshilinch bo'lim");
+        urgentSectBtn.setCallbackData(CB_SECTION_URG + appId);
+        rows.add(List.of(normalSectBtn, urgentSectBtn));
+
+        // 5. Suxbat + Yopish
         InlineKeyboardButton chatBtn = new InlineKeyboardButton();
         chatBtn.setText("Suxbat boshlash"); chatBtn.setCallbackData(CB_START_CHAT + appId);
         InlineKeyboardButton closeBtn = new InlineKeyboardButton();
         closeBtn.setText("Yopish"); closeBtn.setCallbackData(CB_CLOSE_APP + appId);
         rows.add(List.of(chatBtn, closeBtn));
 
+        // 6. Word barchasi
         InlineKeyboardButton exportAllBtn = new InlineKeyboardButton();
         exportAllBtn.setText("Word (barchasi)"); exportAllBtn.setCallbackData(CB_EXPORT_ALL);
         rows.add(List.of(exportAllBtn));
@@ -1273,10 +1634,15 @@ public class ConversationBot extends TelegramLongPollingBot {
         }
     }
 
+    /**
+     * [YANGI] saveApplication — applicantPhone ham saqlanadi.
+     * BotStateService.getUserPhone(chatId) orqali olinadi.
+     */
     private Application saveApplication(String chatId, String lang, String text,
                                         Long parentId, String fileId, String fileType) {
         Application app = new Application();
         app.setApplicantName(state.getUserName(chatId));
+        app.setPhoneNumber(state.getPhoneNumber(chatId));  // [YANGI]
         app.setDescription(text);
         app.setLang(lang);
         app.setChatId(chatId);

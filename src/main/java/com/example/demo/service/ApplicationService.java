@@ -1,6 +1,7 @@
 package com.example.demo.service;
 
 import com.example.demo.entity.Application;
+import com.example.demo.enums.ApplicationSection;
 import com.example.demo.enums.ApplicationStatus;
 import com.example.demo.enums.Priority;
 import com.example.demo.exception.ResourceNotFoundException;
@@ -18,11 +19,10 @@ import java.util.*;
 /**
  * ApplicationService — Murojaat biznes logikasi.
  *
- * O'zgarishlar:
- *   - markAsViewed() da ikki marta DB query yo'qoldi (avval getById() + save edi)
- *   - Barcha metodlarda ResourceNotFoundException → to'g'ri 404
- *   - SLF4J logger qo'shildi
- *   - @Transactional(readOnly=true) klass darajasida, write metodlarda override
+ * O'zgarishlar (v8):
+ *   - replyToApplication() → deadline bekor qilinadi
+ *   - updateStatus() → priority o'zgarganda deadline qayta belgilanadi
+ *   - saveWithDeadline() — yangi murojaat saqlashda deadline belgilanadi
  */
 @Service
 @Transactional(readOnly = true)
@@ -31,9 +31,12 @@ public class ApplicationService {
     private static final Logger log = LoggerFactory.getLogger(ApplicationService.class);
 
     private final ApplicationRepository repository;
+    private final DeadlineService        deadlineService;
 
-    public ApplicationService(ApplicationRepository repository) {
-        this.repository = repository;
+    public ApplicationService(ApplicationRepository repository,
+                              DeadlineService deadlineService) {
+        this.repository      = repository;
+        this.deadlineService = deadlineService;
     }
 
     // ─── Ro'yxat ─────────────────────────────────────────────────────────
@@ -74,12 +77,19 @@ public class ApplicationService {
         return saved;
     }
 
+    // ─── Priority o'zgartirish (deadline qayta hisoblanadi) ───────────────
+    @Transactional
+    public Application updatePriority(Long id, Priority newPriority) {
+        Application app = getById(id);
+        app.setPriority(newPriority);
+        // Deadline qayta belgilanadi
+        deadlineService.reassignDeadline(app);
+        log.info("Murojaat #{} prioriteti o'zgartirildi: {} | yangi deadline: {}",
+                id, newPriority, deadlineService.formatDeadline(app));
+        return app;
+    }
+
     // ─── Ko'rildi belgilash ───────────────────────────────────────────────
-    /**
-     * Ikki marta DB query muammosi hal qilindi:
-     * Eski: getById() (1-query) → save (2-query)
-     * Yangi: findById (1-query) → faqat o'zgarsa save (2-query yoki yo'q)
-     */
     @Transactional
     public void markAsViewed(Long id) {
         repository.findById(id).ifPresent(app -> {
@@ -92,6 +102,12 @@ public class ApplicationService {
             if (app.getViewedAt() == null) {
                 app.setViewedAt(LocalDateTime.now());
                 changed = true;
+            }
+            // Deadline yo'q bo'lsa — belgilanadi
+            if (app.getDeadline() == null) {
+                app.setDeadline(deadlineService.calculateDeadline(app));
+                changed = true;
+                log.debug("Murojaat #{} ga deadline belgilandi (markAsViewed)", id);
             }
             if (changed) {
                 repository.save(app);
@@ -107,6 +123,17 @@ public class ApplicationService {
         }
         repository.deleteById(id);
         log.info("Murojaat #{} o'chirildi", id);
+    }
+
+    // ─── Deadline qo'lda yangilash (admin paneldan) ───────────────────────
+    @Transactional
+    public Application updateDeadline(Long id, LocalDateTime newDeadline) {
+        Application app = getById(id);
+        app.setDeadline(newDeadline);
+        app.setDeadlineNotified(false);
+        Application saved = repository.save(app);
+        log.info("Murojaat #{} deadline qo'lda o'zgartirildi: {}", id, newDeadline);
+        return saved;
     }
 
     // ─── Statistika ───────────────────────────────────────────────────────
@@ -126,6 +153,9 @@ public class ApplicationService {
         LocalDateTime weekAgo = LocalDateTime.now().minusDays(7);
         stats.put("thisWeek", repository.countSince(weekAgo));
 
+        // Deadline o'tib ketganlar soni
+        stats.put("overdue", repository.countOverdueApplications(LocalDateTime.now()));
+
         List<Object[]> langStats = repository.countGroupByLang();
         Map<String, Long> langMap = new LinkedHashMap<>();
         for (Object[] row : langStats) langMap.put((String) row[0], (Long) row[1]);
@@ -140,4 +170,37 @@ public class ApplicationService {
 
         return stats;
     }
+    /**
+     * Faqat muddatni o'zgartirish (admin ixtiyoriy).
+     *
+     * @param id   murojaat ID
+     * @param days necha kun (1-365)
+     * @return yangilangan murojaat
+     */
+    @Transactional
+    public Application setDeadline(Long id, int days) {
+        Application app = getById(id);
+        app.setDeadline(LocalDateTime.now().plusDays(days));
+        Application saved = repository.save(app);
+        log.info("Murojaat #{} muddati yangilandi: +{} kun", id, days);
+        return saved;
+    }
+    /**
+     * Bo'lim belgilash + avtomatik muddat qo'yish.
+     *
+     * @param id      murojaat ID
+     * @param section NORMAL yoki URGENT
+     * @param days    muddat (kun): NORMAL=10, URGENT=5
+     * @return yangilangan murojaat
+     */
+    @Transactional
+    public Application assignSection(Long id, ApplicationSection section, int days) {
+        Application app = getById(id);
+        app.setSection(section);
+        app.setDeadline(LocalDateTime.now().plusDays(days));
+        Application saved = repository.save(app);
+        log.info("Murojaat #{} → bo'lim: {}, muddat: +{} kun", id, section, days);
+        return saved;
+    }
+
 }

@@ -483,7 +483,6 @@
                 document.getElementById('setup-card').style.display  = 'block';
             }
         } catch { /* server bilan aloqa yo'q - login ko'rsatilsin */ }
-        setInterval(autoRefresh, 23*3600*1000);
         initKeyboard();
         initNotifications();
     });
@@ -580,8 +579,13 @@
         if(ME?.role==='SUPER_ADMIN'){ document.getElementById('nav-users').style.display='flex'; document.getElementById('admsec').style.display='block'; }
         document.querySelectorAll('.nl[data-p]').forEach(el=>el.addEventListener('click',()=>nav(el.dataset.p)));
         nav('dashboard');
-        setInterval(loadStats,60000);
-        setInterval(checkNewApps,30000);
+        // [TUZATILDI] autoRefresh DOMContentLoaded dan bu yerga ko'chirildi —
+        // token faqat login qilgandan keyin mavjud bo'ladi
+        // Har 23 soatda token yangilanadi (muddat 24 soat)
+        setInterval(autoRefresh, 23*3600*1000);
+        setInterval(loadStats, 60000);
+        // [TUZATILDI] checkNewApps aniqlanmagan edi → loadStats bilan almashtirildi
+        setInterval(loadStats, 30000);
     }
 
     // ═══════════════════════════════════════════════════════
@@ -666,7 +670,7 @@
     async function pgDashboard(){
         const el=document.getElementById('pg-dashboard'); el.innerHTML=spin();
         const s=await loadStats(); if(!s){el.innerHTML=err('Statistika yuklanmadi');return;}
-        const{total=0,pending=0,inReview=0,replied=0,urgent=0,today=0,thisWeek=0,byLang={},daily=[]}=s;
+        const{total=0,pending=0,inReview=0,replied=0,closed=0,urgent=0,today=0,thisWeek=0,overdue=0,byLang={},daily=[]}=s;
         el.innerHTML=`
   <div class="sg">
     <div class="sc c1" onclick="nav('apps')"><div class="sico">📋</div><div class="snum">${total}</div><div class="slabel">Jami</div></div>
@@ -676,6 +680,7 @@
     <div class="sc c5" onclick="nav('urgent')"><div class="sico">🚨</div><div class="snum">${urgent}</div><div class="slabel">Shoshilinch</div></div>
     <div class="sc c6"><div class="sico">📅</div><div class="snum">${today}</div><div class="slabel">Bugun</div></div>
     <div class="sc c7"><div class="sico">📆</div><div class="snum">${thisWeek}</div><div class="slabel">Bu hafta</div></div>
+    <div class="sc c5"><div class="sico">⏰</div><div class="snum">${overdue}</div><div class="slabel">Muddat o'tgan</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
     <div class="card"><div class="ch"><span class="ct">🌐 Til bo'yicha</span></div><div class="cb">${langChart(byLang,total)}</div></div>
@@ -707,7 +712,7 @@
     async function pgCharts(){
         const el=document.getElementById('pg-charts'); el.innerHTML=spin();
         const s=await loadStats(); if(!s){el.innerHTML=err('Yuklanmadi');return;}
-        const{total=0,pending=0,inReview=0,replied=0,closed=0,byLang={},daily=[]}=s;
+        const{total=0,pending=0,inReview=0,replied=0,closed=0,urgent=0,overdue=0,byLang={},daily=[]}=s;
         el.innerHTML=`
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
     <div class="card"><div class="ch"><span class="ct">📊 Holat bo'yicha</span></div>
@@ -769,9 +774,9 @@
     <div class="tw"><table>
       <thead><tr>
         <th><input type="checkbox" class="chkbox" id="chk-all" onchange="toggleAll(this.checked)"/></th>
-        <th>#</th><th>Murojaat</th><th>📎</th><th>Holat</th><th>Tur</th><th>Kategoriya</th><th>Til</th><th>Vaqt</th>
+        <th>#</th><th>Murojaat</th><th>📎</th><th>Holat</th><th>Tur</th><th>Bo'lim</th><th>Muddat</th><th>Kategoriya</th><th>Til</th><th>Vaqt</th>
       </tr></thead>
-      <tbody id="tbd"><tr><td colspan="9" class="lcell"><span class="spin"></span>Yuklanmoqda…</td></tr></tbody>
+      <tbody id="tbd"><tr><td colspan="11" class="lcell"><span class="spin"></span>Yuklanmoqda…</td></tr></tbody>
     </table></div>
     <div id="pg" style="display:none"></div>
   </div>`;
@@ -785,8 +790,8 @@
     🚨 <span>Faqat <b>KUTMOQDA</b> holatidagi murojaatlar</span></div>`+fbar()+`
   <div class="card"><div class="tw"><table>
     <thead><tr><th><input type="checkbox" class="chkbox" id="chk-all" onchange="toggleAll(this.checked)"/></th>
-    <th>#</th><th>Murojaat</th><th>📎</th><th>Holat</th><th>Tur</th><th>Kategoriya</th><th>Til</th><th>Vaqt</th></tr></thead>
-    <tbody id="tbd"><tr><td colspan="9" class="lcell"><span class="spin"></span>Yuklanmoqda…</td></tr></tbody>
+    <th>#</th><th>Murojaat</th><th>📎</th><th>Holat</th><th>Tur</th><th>Bo'lim</th><th>Muddat</th><th>Kategoriya</th><th>Til</th><th>Vaqt</th></tr></thead>
+    <tbody id="tbd"><tr><td colspan="11" class="lcell"><span class="spin"></span>Yuklanmoqda…</td></tr></tbody>
   </table></div><div id="pg" style="display:none"></div></div>`;
         bindF(); fetchApps();
     }
@@ -851,6 +856,8 @@
       <td onclick="openApp(${a.id})"><span class="mico">${mico(a.fileType)}</span></td>
       <td onclick="openApp(${a.id})">${stb(a.status)}</td>
       <td onclick="openApp(${a.id})">${priob(a.priority)}</td>
+      <td onclick="openApp(${a.id})">${sectb(a.section)}</td>
+      <td onclick="openApp(${a.id})">${a.deadline?`<span style="color:var(--amber);font-size:12px">${fdt(a.deadline)}</span>`:`<span style="color:var(--muted)">—</span>`}</td>
       <td onclick="openApp(${a.id})">${a.category?`<span class="catbadge">${catLabel(a.category)}</span>`:'<span style="color:var(--muted);font-size:12px">—</span>'}</td>
       <td onclick="openApp(${a.id})"><span class="ltag">${(a.lang||'?').toUpperCase()}</span></td>
       <td class="ttime" onclick="openApp(${a.id})">${fdt(a.submissionTime)}</td>
@@ -943,12 +950,14 @@
 
         res_el.innerHTML=`<div style="font-size:13px;color:var(--muted);margin-bottom:12px">${items.length} ta natija topildi</div>
   <div class="card"><div class="tw"><table>
-    <thead><tr><th>#</th><th>Matn</th><th>Holat</th><th>Til</th><th>Vaqt</th></tr></thead>
+    <thead><tr><th>#</th><th>Matn</th><th>Holat</th><th>Bo'lim</th><th>Muddat</th><th>Til</th><th>Vaqt</th></tr></thead>
     <tbody>${items.map(a=>{
             const desc=esc(sh(a.description,80)).replace(new RegExp(esc(q),'gi'),m=>`<span class="hl">${m}</span>`);
             return `<tr onclick="openApp(${a.id})"><td class="tid">#${a.id}</td>
         <td class="tdesc" style="max-width:320px">${desc}</td>
         <td>${stb(a.status)}</td>
+        <td>${sectb(a.section)}</td>
+        <td>${a.deadline?`<span style="color:var(--amber);font-size:12px">${fdt(a.deadline)}</span>`:`<span style="color:var(--muted)">—</span>`}</td>
         <td><span class="ltag">${(a.lang||'?').toUpperCase()}</span></td>
         <td class="ttime">${fdt(a.submissionTime)}</td>
       </tr>`;
@@ -1008,6 +1017,20 @@
       <div class="dgv"><select class="ssel" onchange="chCat(${app.id},this.value)"><option value="">— Tanlang —</option>${catOpts}</select></div>
       <div class="dgl">Ko'rilgan</div><div class="dgv">${app.viewedAt?fdt(app.viewedAt):'<span style="color:var(--amber)">Ko\'rilmagan</span>'}</div>
       <div class="dgl">Javob vaqti</div><div class="dgv">${app.repliedAt?fdt(app.repliedAt):'<span style="color:var(--muted)">—</span>'}</div>
+      <div class="dgl">Bo'lim</div><div class="dgv" id="section-val-${app.id}">${sectb(app.section)}</div>
+      <div class="dgl">Muddat</div><div class="dgv" id="deadline-val-${app.id}">${app.deadline?`<span style="color:var(--amber);font-weight:600">${fdt(app.deadline)}</span>`:`<span style="color:var(--muted)">Belgilanmagan</span>`}</div>
+      ${app.phoneNumber?`<div class="dgl">Telefon</div><div class="dgv"><a href="tel:${esc(app.phoneNumber)}" style="color:var(--blue)">${esc(app.phoneNumber)}</a></div>`:''}
+    </div>
+    <div class="slabel2" style="margin-top:14px">📋 Bo'lim & Muddat boshqaruvi</div>
+    <div style="background:var(--bg3);border:1px solid var(--b);border-radius:12px;padding:16px;margin-bottom:14px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn btn-sm" style="background:rgba(77,143,245,.15);color:var(--blue);border:1px solid rgba(77,143,245,.3)" onclick="assignSection(${app.id},'NORMAL')">📋 Oddiy bo'lim (10 kun)</button>
+        <button class="btn btn-sm" style="background:rgba(240,96,96,.15);color:var(--rose);border:1px solid rgba(240,96,96,.3)" onclick="assignSection(${app.id},'URGENT')">🚨 Shoshilinch bo'lim (5 kun)</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="number" id="custom-days-${app.id}" min="1" max="365" placeholder="Kun (1-365)" style="width:130px;padding:7px 10px;background:var(--inp-bg);border:1.5px solid var(--b);border-radius:8px;color:var(--white);font-size:13px;outline:none"/>
+        <button class="btn btn-sm btn-s" onclick="assignCustomDeadline(${app.id})">📅 Muddatni o'zgartirish</button>
+      </div>
     </div>
     ${app.fileId?`<div class="slabel2">📎 Fayl <span style="opacity:.5;font-size:.8em">${mlabel(app.fileType)}</span></div>
     <div id="fprev-${app.id}" style="margin-bottom:10px">${fpreview(app)}</div>
@@ -1376,7 +1399,7 @@
         openDw('Yangi admin yaratish','');
         document.getElementById('dwb').innerHTML=`
     <div class="fr"><label>Username</label><input id="nu-u" type="text" placeholder="username"/></div>
-    <div class="fr"><label>Parol</label><input id="nu-p" type="password" placeholder="Kamida 6 ta belgi"/></div>
+    <div class="fr"><label>Parol</label><input id="nu-p" type="password" placeholder="Kamida 8 ta belgi"/></div>
     <div class="fr"><label>To'liq ism</label><input id="nu-n" type="text" placeholder="Ism Familiya"/></div>
     <div class="fr"><label>Role</label><select id="nu-r">
       <option value="OPERATOR">OPERATOR</option><option value="ADMIN">ADMIN</option><option value="SUPER_ADMIN">SUPER_ADMIN</option>
@@ -1385,18 +1408,21 @@
     }
     async function createUser(){
         const body={username:document.getElementById('nu-u')?.value?.trim(),password:document.getElementById('nu-p')?.value?.trim(),fullName:document.getElementById('nu-n')?.value?.trim(),role:document.getElementById('nu-r')?.value};
+        // [TUZATILDI] 6 → 8 — server AdminUserController da kamida 8 ta belgi talab qiladi
         if(!body.username||!body.password){toast('Login va parol kerak!','er');return;}
+        if(body.password.length<8){toast('Parol kamida 8 ta belgidan iborat bo\'lishi kerak!','er');return;}
         const res=await af('/admin/users',{method:'POST',body:JSON.stringify(body)});
         if(res?.ok){addAudit('Yangi admin yaratildi',body.username);toast('✅ Admin yaratildi','ok');closeDw();pgUsers();}
     }
     function openPwd(id){
         openDw('Parolni o\'zgartirish','');
-        document.getElementById('dwb').innerHTML=`<div class="fr"><label>Yangi parol</label><input id="np" type="password" placeholder="Kamida 6 ta belgi"/></div>`;
+        document.getElementById('dwb').innerHTML=`<div class="fr"><label>Yangi parol</label><input id="np" type="password" placeholder="Kamida 8 ta belgi"/></div>`;
         document.getElementById('dwf').innerHTML=`<button class="btn btn-p" onclick="savePwd(${id})">✅ Saqlash</button><button class="btn btn-s" onclick="closeDw()">Bekor</button>`;
     }
     async function savePwd(id){
         const pwd=document.getElementById('np')?.value?.trim();
-        if(!pwd||pwd.length<6){toast('Kamida 6 ta belgi!','er');return;}
+        // [TUZATILDI] 6 → 8 — server ProfileController da kamida 8 talab qiladi
+        if(!pwd||pwd.length<8){toast('Kamida 8 ta belgi!','er');return;}
         const res=await af(`/admin/users/${id}/password`,{method:'PATCH',body:JSON.stringify({password:pwd})});
         if(res?.ok){toast('✅ Parol yangilandi','ok');closeDw();}
     }
@@ -1559,6 +1585,26 @@
     }
 
     // ═══════════════════════════════════════════════════════
+    //  BILDIRISHNOMALAR
+    // ═══════════════════════════════════════════════════════
+    // [TUZATILDI] checkNotif va initNotifications aniqlanmagan edi
+    // Endi loadStats dan pending va urgent sonini badge ga chiqaradi
+    function initNotifications(){
+        // Ilk yuklashda bildirishnomani tekshirish
+        if(TOKEN && ME) loadStats();
+    }
+    async function checkNotif(){
+        const s = await loadStats();
+        if(!s) return;
+        const msg = [];
+        if(s.pending>0) msg.push(`${s.pending} ta kutmoqda`);
+        if(s.urgent>0)  msg.push(`${s.urgent} ta shoshilinch`);
+        if(s.overdue>0) msg.push(`${s.overdue} ta muddati o'tgan`);
+        if(msg.length) toast('🔔 '+msg.join(', '),'am');
+        else toast('✅ Yangi bildirishnoma yo\'q','ok');
+    }
+
+    // ═══════════════════════════════════════════════════════
     //  API HELPER
     // ═══════════════════════════════════════════════════════
     async function af(path,opts={}){
@@ -1573,6 +1619,70 @@
     // ═══════════════════════════════════════════════════════
     //  HELPERS
     // ═══════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════
+    //  BO'LIM & MUDDAT BOSHQARUVI
+    // ═══════════════════════════════════════════════════════
+
+    // Bo'lim badge
+    function sectb(s){
+        if(!s) return '<span style="color:var(--muted)">Belgilanmagan</span>';
+        if(s==='URGENT') return '<span class="badge b-u">🚨 Shoshilinch bo\'lim</span>';
+        if(s==='NORMAL') return '<span class="badge b-ok">📋 Oddiy bo\'lim</span>';
+        return '<span class="badge b-c">'+s+'</span>';
+    }
+
+    // Bo'lim tayinlash: NORMAL (+10 kun) yoki URGENT (+5 kun)
+    // [TUZATILDI] Avval Promise.all bilan /section VA /deadline ikkalasi chaqirilardi.
+    // /section endpointi ApplicationController da allaqachon deadline belgilaydi —
+    // /deadline ni alohida chaqirish ortiqcha va race condition keltirib chiqarishi mumkin.
+    async function assignSection(appId, section){
+        const days = section==='URGENT' ? 5 : 10;
+        const label = section==='URGENT' ? 'Shoshilinch bo\'lim (5 kun)' : 'Oddiy bo\'lim (10 kun)';
+        if(!confirm(`#${appId} murojaatni "${label}"ga o\'tkazishni tasdiqlaysizmi?`)) return;
+
+        // Faqat /section — u o'zi deadline ni ham belgilaydi
+        const secRes = await af(`/admin/applications/${appId}/section`, {
+            method:'PATCH', body:JSON.stringify({section})
+        });
+
+        if(secRes?.ok){
+            const data = await secRes.json();
+            // UI ni yangilash
+            const secEl = document.getElementById(`section-val-${appId}`);
+            const dlEl  = document.getElementById(`deadline-val-${appId}`);
+            if(secEl) secEl.innerHTML = sectb(section);
+            if(dlEl){
+                const deadline = new Date();
+                deadline.setDate(deadline.getDate() + days);
+                dlEl.innerHTML = `<span style="color:var(--amber);font-weight:600">${fdt(deadline.toISOString())}</span>`;
+            }
+            addAudit(`#${appId} bo\'lim: ${label}`, `Muddat: +${days} kun`);
+            toast(`✅ ${label}ga o\'tkazildi. Muddat: ${days} kun`, 'ok');
+            renderPage(CUR);
+        }
+    }
+
+    // Admin o'zi muddat belgilash
+    async function assignCustomDeadline(appId){
+        const inp = document.getElementById(`custom-days-${appId}`);
+        const days = parseInt(inp?.value);
+        if(!days || days<1 || days>365){
+            toast('❌ 1 dan 365 gacha kun kiriting!','er'); return;
+        }
+        const res = await af(`/admin/applications/${appId}/deadline`,{method:'PATCH',body:JSON.stringify({days})});
+        if(res?.ok){
+            const dlEl = document.getElementById(`deadline-val-${appId}`);
+            if(dlEl){
+                const deadline = new Date();
+                deadline.setDate(deadline.getDate() + days);
+                dlEl.innerHTML = `<span style="color:var(--amber);font-weight:600">${fdt(deadline.toISOString())}</span>`;
+            }
+            addAudit(`#${appId} muddat o\'zgartirildi`, `+${days} kun`);
+            toast(`✅ Muddat belgilandi: ${days} kun`,'ok');
+            if(inp) inp.value='';
+        }
+    }
+
     function stb(s){const m={PENDING:['b-p','⏳ Kutmoqda'],IN_REVIEW:['b-r','🔍 Ko\'rilmoqda'],REPLIED:['b-a','✅ Javob berildi'],CLOSED:['b-c','🔒 Yopildi']};const[c,t]=m[s]||['b-c',s||'—'];return`<span class="badge ${c}">${t}</span>`;}
     function priob(p){return p==='URGENT'?`<span class="badge b-u">🔴 Shoshilinch</span>`:`<span class="badge b-n">🟢 Oddiy</span>`;}
     function mico(t){const m={photo:'🖼',audio:'🎵',voice:'🎤',video:'🎥',video_note:'📹',animation:'🎞',document:'📎',sticker:'🔖',location:'📍',contact:'📞'};return t?(m[t]||'📎'):'';}

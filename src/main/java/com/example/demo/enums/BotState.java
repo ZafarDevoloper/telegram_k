@@ -3,22 +3,19 @@ package com.example.demo.enums;
 /**
  * BotState — Bot holatlari.
  *
- * ConversationBot da String o'rniga enum ishlatiladi:
- *   - Xato nom yozilsa compile vaqtida tutiladi
- *   - IDE autocomplete ishlaydi
- *   - switch exhaustive tekshiruvi bor
+ * Yangi holatlari (v8.0):
+ *   - NAME     — Foydalanuvchi ism-familyasini kiritmoqda
+ *   - PHONE    — Telefon raqam kiritmoqda
+ *   Avvalgisi: LANGUAGE → NAME → PHONE → DESCRIPTION
  */
 public enum BotState {
-    /** Til tanlash kutilmoqda */
     LANGUAGE,
-    /** Murojaat matni kutilmoqda */
+    FULL_NAME,
+    PHONE,
     DESCRIPTION,
-    /** Qo'shimcha ma'lumot kutilmoqda */
     ADDITIONAL,
-    /** Admin javob matni kutilmoqda */
     ADMIN_REPLY,
-    /** Foydalanuvchi live chat rejimida */
+    BROADCAST,
     CHAT,
-    /** Admin broadcast matni kutilmoqda */
-    BROADCAST
+    DEADLINE  // Admin muddatni kiritmoqda
 }

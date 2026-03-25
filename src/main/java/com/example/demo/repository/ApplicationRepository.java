@@ -2,6 +2,7 @@ package com.example.demo.repository;
 
 import com.example.demo.entity.Application;
 import com.example.demo.enums.ApplicationCategory;
+import com.example.demo.enums.ApplicationSection;
 import com.example.demo.enums.ApplicationStatus;
 import com.example.demo.enums.Priority;
 import org.springframework.data.domain.Page;
@@ -95,12 +96,12 @@ public interface ApplicationRepository extends JpaRepository<Application, Long> 
 
     // ─── Oylik hisobot ────────────────────────────────────────────────────
     @Query("""
-        SELECT MONTH(a.submissionTime), COUNT(a)
-        FROM Application a
-        WHERE YEAR(a.submissionTime) = :year
-        GROUP BY MONTH(a.submissionTime)
-        ORDER BY MONTH(a.submissionTime)
-    """)
+    SELECT EXTRACT(MONTH FROM a.submissionTime), COUNT(a)
+    FROM Application a
+    WHERE EXTRACT(YEAR FROM a.submissionTime) = :year
+    GROUP BY EXTRACT(MONTH FROM a.submissionTime)
+    ORDER BY EXTRACT(MONTH FROM a.submissionTime)
+""")
     List<Object[]> countByMonthForYear(@Param("year") int year);
 
     // ─── ChatId bo'yicha soni ─────────────────────────────────────────────
@@ -111,11 +112,55 @@ public interface ApplicationRepository extends JpaRepository<Application, Long> 
     @Query("SELECT DISTINCT a.chatId FROM Application a WHERE a.chatId IS NOT NULL")
     List<String> findDistinctChatIds();
 
-    // ─── [YANGI] Restart notify uchun: berilgan statuslardagi chatId lar ──
-    /**
-     * BotRestartNotifier ishlatadi.
-     * PENDING yoki IN_REVIEW murojaatlar egalariga restart xabari yuboriladi.
-     */
+    // ─── Restart notify uchun: berilgan statuslardagi chatId lar ──────────
     @Query("SELECT DISTINCT a.chatId FROM Application a WHERE a.chatId IS NOT NULL AND a.status IN :statuses")
     List<String> findDistinctChatIdsByStatusIn(@Param("statuses") List<ApplicationStatus> statuses);
+
+    // ─── [YANGI] Deadline o'tib ketgan murojaatlar ────────────────────────
+    /**
+     * DeadlineService ishlatadi.
+     * Shartlar:
+     *   - deadline belgilangan
+     *   - deadline vaqti o'tib ketgan (now dan oldin)
+     *   - hali yopilmagan (CLOSED emas, REPLIED emas)
+     *   - deadlineNotified = false (xabar yuborilmagan)
+     */
+    @Query("""
+        SELECT a FROM Application a
+        WHERE a.deadline IS NOT NULL
+          AND a.deadline < :now
+          AND a.status NOT IN ('CLOSED', 'REPLIED')
+          AND a.deadlineNotified = false
+        ORDER BY a.deadline ASC
+    """)
+    List<Application> findOverdueApplications(@Param("now") LocalDateTime now);
+
+    // ─── [YANGI] Yaqinlashayotgan deadline (24 soat qoldi) ───────────────
+    @Query("""
+        SELECT a FROM Application a
+        WHERE a.deadline IS NOT NULL
+          AND a.deadline BETWEEN :now AND :soon
+          AND a.status NOT IN ('CLOSED', 'REPLIED')
+          AND a.deadlineNotified = false
+        ORDER BY a.deadline ASC
+    """)
+    List<Application> findUpcomingDeadlines(
+            @Param("now")  LocalDateTime now,
+            @Param("soon") LocalDateTime soon
+    );
+
+    @Query("""
+    SELECT COUNT(a) FROM Application a
+    WHERE a.section = :applicationSection
+""")
+    long countBySection(@Param("applicationSection") ApplicationSection applicationSection);
+
+    @Query("""
+    SELECT COUNT(a) FROM Application a
+    WHERE a.deadline IS NOT NULL
+      AND a.deadline < :now
+      AND a.status NOT IN ('CLOSED', 'REPLIED')
+      AND a.deadlineNotified = false
+""")
+    long countOverdueApplications(@Param("now") LocalDateTime now);
 }

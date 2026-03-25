@@ -11,11 +11,10 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * BotStateService — Bot holatlari va foydalanuvchi ma'lumotlarini saqlaydi.
  *
- * O'zgarishlar:
- *   - State endi String emas, BotState enum — xato nomlar compile vaqtida tutiladi
- *   - hasStoredLang() — til tanlangan-tanlangmaganligini tekshiradi (F3 fix)
- *   - knownUserChatIds — broadcast uchun noyob chatId lar (F4 fix)
- *   - STATE_TTL_MS — 30 daqiqa, faol bo'lmagan state tozalanadi
+ * O'zgarishlar (v8):
+ *   - fullNames   — foydalanuvchi ism-familyasi (bir marta so'raladi)
+ *   - phoneNumbers — foydalanuvchi telefon raqami (bir marta so'raladi)
+ *   - hasStoredContact() — kontakt ma'lumotlari saqlanganligi tekshiruvi
  */
 @Service
 public class BotStateService {
@@ -28,6 +27,8 @@ public class BotStateService {
     private final Map<String, Long>     chatByUser  = new ConcurrentHashMap<>();
     private final Map<String, String>   chatByAdmin = new ConcurrentHashMap<>();
     private final Map<String, String>   userNames   = new ConcurrentHashMap<>();
+    private final Map<String, String>   fullNames   = new ConcurrentHashMap<>();
+    private final Map<String, String>   phoneNumbers= new ConcurrentHashMap<>();
     private final Map<String, Long>     albumAppIds = new ConcurrentHashMap<>();
     private final Map<String, Long>     lastMsgTime = new ConcurrentHashMap<>();
 
@@ -73,12 +74,34 @@ public class BotStateService {
         return langs.getOrDefault(chatId, "uz");
     }
 
-    /**
-     * Foydalanuvchi avval til tanlaganmi?
-     * langs mapda chatId bor → til tanlangan.
-     */
     public boolean hasStoredLang(String chatId) {
         return langs.containsKey(chatId);
+    }
+
+    // ─── Kontakt (ism-familya + telefon) ─────────────────────────────────
+
+    public void setFullName(String chatId, String fullName) {
+        fullNames.put(chatId, fullName);
+    }
+
+    public String getFullName(String chatId) {
+        return fullNames.getOrDefault(chatId, "Anonim");
+    }
+
+    public void setPhoneNumber(String chatId, String phone) {
+        phoneNumbers.put(chatId, phone);
+    }
+
+    public String getPhoneNumber(String chatId) {
+        return phoneNumbers.getOrDefault(chatId, "");
+    }
+
+    /**
+     * Foydalanuvchi ism-familya va telefon raqamini kiritganmi?
+     * Ikkisi ham bo'lsa true qaytaradi.
+     */
+    public boolean hasStoredContact(String chatId) {
+        return fullNames.containsKey(chatId) && phoneNumbers.containsKey(chatId);
     }
 
     // ─── Oxirgi murojaat ID ──────────────────────────────────────────────
@@ -130,7 +153,7 @@ public class BotStateService {
         chatByUser.remove(userChatId);
     }
 
-    // ─── Foydalanuvchi ismi ──────────────────────────────────────────────
+    // ─── Foydalanuvchi ismi (Telegram dan) ──────────────────────────────
 
     public void setUserName(String chatId, String name) {
         userNames.put(chatId, name);
@@ -141,11 +164,6 @@ public class BotStateService {
         return userNames.getOrDefault(chatId, "Anonim");
     }
 
-    /**
-     * Broadcast uchun noyob chatId lar.
-     * Eslatma: bot restart bo'lsa tozalanadi.
-     * To'liq yechim: repository.findDistinctChatIds()
-     */
     public Set<String> getKnownUserChatIds() {
         return Set.copyOf(knownUserChatIds);
     }
@@ -177,6 +195,6 @@ public class BotStateService {
         stateTimes.remove(chatId);
         lastAppIds.remove(chatId);
         adminReply.remove(chatId);
-        // langs va userNames saqlanadi — til eslab qolish uchun
+        // langs, fullNames, phoneNumbers, userNames — saqlanadi
     }
 }
